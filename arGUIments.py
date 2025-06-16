@@ -22,6 +22,16 @@ from rich.text import Text
 console_stream = Console(force_terminal=True)
 
 
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        # Running as bundled executable
+        return os.path.dirname(sys.executable)
+    else:
+        # Running as normal Python script
+        return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR_SETTINGS = get_base_path()
+
 
 if hasattr(sys, '_MEIPASS'):
     BASE_DIR = sys._MEIPASS
@@ -29,8 +39,13 @@ else:
     BASE_DIR = os.path.abspath(".")
     
 
-PROFILE_FILE = "profiles.json"
-SETTINGS_FILE = "settings.ini"
+
+# PROFILE_FILE = "profiles.json"
+# SETTINGS_FILE = "settings.ini"
+
+
+PROFILE_FILE = os.path.join(BASE_DIR_SETTINGS, "profiles.json")
+SETTINGS_FILE = os.path.join(BASE_DIR_SETTINGS, "settings.ini")
 
 
 
@@ -70,12 +85,15 @@ class Tooltip:
 
 # ============ SETTINGS =============
 def load_settings():
-    config = configparser.ConfigParser()
+    # config = configparser.ConfigParser()
+    config = configparser.ConfigParser(interpolation=None)
     if not os.path.exists(SETTINGS_FILE):
         config['DEFAULT'] = {
-            'software_path': '',
+            'software_path': 'yt-dlp',
+            'output_parameter': '--output',
             'output_folder': '',
-            'use_custom_output': 'False'
+            'filename_template': '%(title)s.%(ext)s',
+            # 'use_custom_output': 'False'
         }
         with open(SETTINGS_FILE, 'w') as f:
             config.write(f)
@@ -109,36 +127,55 @@ def build_command(shortname, user_args):
     if not profile:
         raise ValueError("Profile not found.")
 
-    template = profile['command_template']
+    command_template = profile['command_template']
     try:
-        args = shlex.split(template.format(*user_args))
+        args = shlex.split(command_template.format(*user_args))
     except IndexError as e:
         raise ValueError(f"Missing arguments: {e}")
 
-    yt_path = profile.get("custom_path") or settings['DEFAULT'].get('software_path')
+    path_mode = profile.get("path_mode", "default")
     
-    if not yt_path:
+    if path_mode == "default":
+        software_path = settings['DEFAULT'].get('software_path')
+    elif path_mode == "custom":
+        software_path = profile.get("program_path")
+    
+    if not software_path:
         raise ValueError("Software path is not defined in settings or in profile.")
     
-    command = [yt_path] + args
+    command = [software_path] + args
 
+
+    flag = None
+    exportmode = profile.get("export_output_mode")
+    if exportmode == "default":
+        flag = settings['DEFAULT'].get('output_parameter')
+    elif exportmode == "custom":
+        flag = profile.get("custom_output_flag")       
+    
+    folder = None
     mode = profile.get("export_mode", "default")
-    flag = profile.get("custom_output_flag", "--output")
-    folder = ""
-
-    if mode == "default" and settings['DEFAULT'].getboolean('use_custom_output', False):
-        folder = settings['DEFAULT'].get('output_folder', '')
+    if mode == "default":
+        folder = settings['DEFAULT'].get('output_folder')
+    elif mode == "software":
+        folder = ''
     elif mode == "custom":
-        folder = profile.get("custom_export_path", "")
-
-    if folder and mode != "none":
-        command += [flag, f"{folder}/%(title)s.%(ext)s"]
+        folder = profile.get("custom_export_path", "")        
         
-    if settings['DEFAULT'].getboolean('use_custom_output', False):
-        out_folder = settings['DEFAULT'].get('output_folder', '')
-        if out_folder:
-            command += ['--output', f'{out_folder}/%(title)s.%(ext)s']
-
+    template = None
+    template_name = profile.get("filename_mode")
+    if template_name == "default":
+        template = settings['DEFAULT'].get('filename_template')
+    elif template_name == "custom":
+        template = profile.get("custom_filename_template")       
+        
+        
+    if exportmode != "disable":
+        if folder == "":
+            command += [flag, f"{template}"]
+        else:
+            command += [flag, f"{folder}/{template}"]
+        
     return command
 
 
@@ -190,13 +227,11 @@ def kill_process():
     finally:
         yt_process = None
 
-
 def center_window(win, width=400, height=300):
     win.update_idletasks()
     x = root.winfo_x() + (root.winfo_width() - width) // 2
     y = root.winfo_y() + (root.winfo_height() - height) // 2
     win.geometry(f"{width}x{height}+{x}+{y}")
-
 
 # --- NEW FUNCTION ---
 # This function sends user input to the running process.
@@ -227,7 +262,6 @@ def send_to_process(event=None):
             append_console_output(f"\n[Process has exited with code: {rc}]\n")
         else:
             append_console_output("\n[No active process to send input to]\n")
-
 
 def run_command(command, show_output_in_gui=True):
     global yt_process
@@ -379,8 +413,6 @@ def run_command(command, show_output_in_gui=True):
 
     threading.Thread(target=task, daemon=True).start()
     
-
-
 def count_placeholders(template):
     return len(re.findall(r"{[^}]*}", template))
     
@@ -401,138 +433,308 @@ def run_command_threaded(command):
 # ============ GUI =============
 def add_profile():
     root.focus_set()
+
     top = tk.Toplevel(root)
     top.grab_set()
     top.title("Add profile")
     top.resizable(False, False)
     top.iconbitmap(os.path.join(BASE_DIR, "icon.ico"))
-    top.attributes("-topmost", True)
-    center_window(top, width=580, height=370)  # Adjust dimensions as needed
+    # top.attributes("-topmost", True)
+    center_window(top, width=642, height=600)  # Adjust dimensions as needed  ❔ add 20
+
 
     entries = {}
 
-    def labeled_entry(label, row):
-        tk.Label(top, text=label).grid(row=row, column=0, sticky='e')
-        e = tk.Entry(top, width=40)
-        e.grid(row=row, column=1, padx=5, pady=2)
+    def labeled_entry(label, row, place, tooptip):
+        f = tk.Label(place, text=label)
+        f.grid(row=row, column=0, sticky='w', padx=15, pady=5)
+        e = tk.Entry(place, width=40)
+        
+        # if settings == activate tooltip
+        Tooltip(f, "")  
+        e.grid(row=row, column=1, padx=15, pady=2)
         return e
 
-    entries['name'] = labeled_entry("Profile Display Name:", 0)
-    entries['short'] = labeled_entry("Profile Shortname:", 1)
-    entries['template'] = labeled_entry("Command Template:", 2)
-    entries['arg_names'] = labeled_entry("Argument Names (comma-separated):", 3)
-  
-    export_mode = tk.StringVar(value="default")
 
-    # Frame for radio buttons
-    export_group = tk.LabelFrame(top, text="Export Folder Mode")
-    export_group.grid(row=5, column=0,  sticky='e')
-
-    tk.Radiobutton(export_group, text="Use default", variable=export_mode, value="default").grid(row=0, column=0, sticky='w')
-    tk.Radiobutton(export_group, text="Use custom", variable=export_mode, value="custom").grid(row=1, column=0, sticky='w')
-    tk.Radiobutton(export_group, text="Do not use export", variable=export_mode, value="none").grid(row=2, column=0, sticky='w')
-
-    custom_frame = tk.Frame(top)
-
-    custom_output_label = tk.Label(custom_frame, text="Custom Output Path Parameter:")
-    custom_output_label.grid(row=6, column=0, sticky='e')    
-    custom_output_entry = tk.Entry(custom_frame, width=40)
-    custom_output_entry.grid(row=6, column=1, padx=5, pady=2)
+    firstpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    firstpart_group.grid(row=0, column=0,  sticky='nswe')
     
-    custom_export_label = tk.Label(custom_frame, text="Custom Export Folder Path:")
-    custom_export_label.grid(row=7, column=0, sticky='e')    
-    custom_export_entry = tk.Entry(custom_frame, width=40)
-    custom_export_entry.grid(row=7, column=1, padx=5, pady=2)    
-    browse_export_btn = ttk.Button(custom_frame, text="Browse", command=lambda: choose_folder(custom_export_entry))
-    browse_export_btn.grid(row=7, column=2, padx=5)
+    entries['name'] = labeled_entry("Profile Display Name:", 0, firstpart_group, "")
+    entries['short'] = labeled_entry("Profile Shortname:", 1, firstpart_group, "")
+
+    separator = ttk.Separator(firstpart_group, orient='horizontal')
+    separator.grid(row=2, column=0, columnspan=3, sticky='nswe', pady=10)
+
+
+ 
+    frame_inline = tk.LabelFrame(firstpart_group, text="Program Path")
+    frame_inline.grid(row=3, column=0,  sticky='w', padx=15)
+    
+    path_mode = tk.StringVar(value="default")
+    rb1 = tk.Radiobutton(frame_inline, text="Default (as per settings)", variable=path_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
+    rb2 = tk.Radiobutton(frame_inline, text="Custom (for this Profile)", variable=path_mode, value="custom").grid(row=1, column=0, sticky='w', columnspan=2)
+    
+    entries['custom_soft_entry'] = tk.Entry(firstpart_group, width=40)
+    # entries['custom_soft_entry'].insert(0, profile['program_path'])
+    entries['custom_soft_entry'].grid(row=3, column=1, padx=15, pady=(0,5), sticky='sw')
+    browse_btn = ttk.Button(firstpart_group, text="Browse", command=lambda: choose_file(entries['custom_soft_entry'], top))
+    browse_btn.grid(row=3, column=2, padx=5, sticky='sw')
+
+    def update_custom_path_mode(*args):
+        entries['custom_soft_entry'].configure(state='normal')                 
+        browse_btn.configure(state='normal')          
+        if path_mode.get() == "custom":   
+            entries['custom_soft_entry'].delete(0, tk.END) 
+            # entries['custom_soft_entry'].insert(0, profile['program_path'])                       
+        else:
+            entries['custom_soft_entry'].delete(0, tk.END) 
+            entries['custom_soft_entry'].insert(0, settings['DEFAULT'].get('software_path', ''))
+            entries['custom_soft_entry'].configure(state='disable')
+            browse_btn.configure(state='disable')
+
+    path_mode.trace_add("write", update_custom_path_mode)
+    update_custom_path_mode()
+    
+    entries['template'] = labeled_entry("Command Template:", 4, firstpart_group, "")
+    entries['arg_names'] = labeled_entry("Argument(s) Name(s) (comma-separated):", 5, firstpart_group, "")
+ 
+    separator = ttk.Separator(firstpart_group, orient='horizontal')
+    separator.grid(row=6, column=0, columnspan=3, sticky='nswe', pady=10)
+    
+    
+    
+    
+    
+    output_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    output_group.grid(row=1, column=0,  sticky='nswe')
+    export_output_mode = tk.StringVar(value="default")
+    exportparam_group = tk.LabelFrame(output_group, text="Output Parameter")
+    exportparam_group.grid(row=0, column=0,  sticky='w', padx=15)
+    tk.Radiobutton(exportparam_group, text="Default (as per settings)  ", variable=export_output_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
+    tk.Radiobutton(exportparam_group, text="Disable Output", variable=export_output_mode, value="disable").grid(row=1, column=0, sticky='w', columnspan=2)
+    tk.Radiobutton(exportparam_group, text="Custom (for this Profile)", variable=export_output_mode, value="custom").grid(row=2, column=0, sticky='w')    
+    exportparam_groupright = tk.LabelFrame(output_group, borderwidth = 0, highlightthickness = 0)
+    exportparam_groupright.grid(row=0, column=1,  sticky='s')
+    entries['custom_output_param_entry'] = tk.Entry(exportparam_groupright, width=40)
+    # entries['custom_output_param_entry'].insert(0, profile['custom_output_flag'])
+    entries['custom_output_param_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
+
+    
+    secondpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    secondpart_group.grid(row=2, column=0,  sticky='nswe')
+    export_mode = tk.StringVar(value="default")
+    export_group = tk.LabelFrame(secondpart_group, text="Output Path")
+    export_group.grid(row=0, column=0,  sticky='w', padx=15)
+    choice_path_1 = tk.Radiobutton(export_group, text="Default (as per settings) ", variable=export_mode, value="default")
+    choice_path_1.grid(row=0, column=0, sticky='w', columnspan=2)
+    choice_path_2 = tk.Radiobutton(export_group, text="Variable (as per location)", variable=export_mode, value="software")
+    choice_path_2.grid(row=1, column=0, sticky='w')    
+    choice_path_3 = tk.Radiobutton(export_group, text="Custom (for this Profile)", variable=export_mode, value="custom")
+    choice_path_3.grid(row=2, column=0, sticky='w', columnspan=2)
+    export_groupright = tk.LabelFrame(secondpart_group, borderwidth = 0, highlightthickness = 0)
+    export_groupright.grid(row=0, column=1,  sticky='s')
+    entries['custom_export_entry'] = tk.Entry(export_groupright, width=40)
+    # entries['custom_export_entry'].insert(0, profile['custom_export_path'])
+    browse_export_btn = ttk.Button(export_groupright, text="Browse", command=lambda: choose_folder(entries['custom_export_entry'], top))
+    entries['custom_export_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
+    browse_export_btn.grid(row=0, column=1, padx=20, sticky='w')
+ 
+ 
+    filename_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    filename_group.grid(row=3, column=0,  sticky='nswe')
+    filenametemplate_mode = tk.StringVar(value="default")
+    template_group = tk.LabelFrame(filename_group, text="Output Filename Template")
+    template_group.grid(row=0, column=0,  sticky='w', padx=15)
+    choice_filename_1 = tk.Radiobutton(template_group, text="Default (as per settings)  ", variable=filenametemplate_mode, value="default")
+    choice_filename_1.grid(row=0, column=0, sticky='w', columnspan=2)
+    choice_filename_2 = tk.Radiobutton(template_group, text="Custom (for this Profile)", variable=filenametemplate_mode, value="custom")
+    choice_filename_2.grid(row=1, column=0, sticky='w')    
+    filenameparam_groupright = tk.LabelFrame(filename_group, borderwidth = 0, highlightthickness = 0)
+    filenameparam_groupright.grid(row=0, column=1,  sticky='s')
+    entries['filename_template_param_entry'] = tk.Entry(filenameparam_groupright, width=40)
+    # entries['filename_template_param_entry'].insert(0, profile['custom_filename_template'])
+    entries['filename_template_param_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
+    
+     
+    
     
     def update_custom_export_visibility(*args):
+        entries['custom_export_entry'].configure(state='normal')                 
+        browse_export_btn.configure(state='normal')  
         if export_mode.get() == "custom":
-            custom_frame.grid(row=6, column=0, columnspan=3,  padx=5, pady=2, sticky='e')
-        else:
-            custom_frame.grid_remove()
+            entries['custom_export_entry'].delete(0, tk.END) 
+            # entries['custom_export_entry'].insert(0, profile['custom_export_path'])            
+        elif export_mode.get() == "default":
+            entries['custom_export_entry'].delete(0, tk.END) 
+            entries['custom_export_entry'].insert(0, settings['DEFAULT'].get('output_folder', ''))
+            entries['custom_export_entry'].configure(state='disable')
+            browse_export_btn.configure(state='disable')            
+        elif export_mode.get() == "software":
+            entries['custom_export_entry'].delete(0, tk.END)                 
+            entries['custom_export_entry'].insert(0, '')                
+            entries['custom_export_entry'].configure(state='disable')
+            browse_export_btn.configure(state='disable')
 
     export_mode.trace_add("write", update_custom_export_visibility)
     update_custom_export_visibility()
 
 
 
-    entries['custom_path'] = labeled_entry("Custom Program Path (optional):", 4)
-    browse_btn = ttk.Button(top, text="Browse", command=lambda: choose_file(entries['custom_path'], top))
-    browse_btn.grid(row=4, column=2, padx=5)
+    def update_custom_filename_visibility(*args):
+        entries['filename_template_param_entry'].configure(state='normal')                 
+        if filenametemplate_mode.get() == "custom":
+            entries['filename_template_param_entry'].delete(0, tk.END) 
+            # entries['filename_template_param_entry'].insert(0, profile['custom_filename_template'])            
+        elif filenametemplate_mode.get() == "default":
+            entries['filename_template_param_entry'].delete(0, tk.END) 
+            entries['filename_template_param_entry'].insert(0, settings['DEFAULT'].get('filename_template', ''))
+            entries['filename_template_param_entry'].configure(state='disable')          
+
+    filenametemplate_mode.trace_add("write", update_custom_filename_visibility)
+    update_custom_filename_visibility()
     
-    error_label = tk.Label(top, text="", fg="red")
-    error_label.grid(row=8, column=0, columnspan=2, sticky='e')
     
+    
+
+    def update_custom_output_visibility(*args):
+        entries['custom_output_param_entry'].configure(state='normal')  
+        if export_output_mode.get() == "custom":
+            entries['custom_output_param_entry'].delete(0, tk.END) 
+            # entries['custom_output_param_entry'].insert(0, profile['custom_output_flag'])            
+            update_custom_export_visibility()
+            update_custom_filename_visibility()
+            choice_path_1.config(state='normal')
+            choice_path_2.config(state='normal')
+            choice_path_3.config(state='normal') 
+            choice_filename_1.config(state='normal')
+            choice_filename_2.config(state='normal')            
+        elif export_output_mode.get() == "default":
+            entries['custom_output_param_entry'].delete(0, tk.END) 
+            entries['custom_output_param_entry'].insert(0, settings['DEFAULT'].get('output_parameter', ''))
+            entries['custom_output_param_entry'].configure(state='disable')
+            update_custom_export_visibility()
+            update_custom_filename_visibility()
+            choice_path_1.config(state='normal')
+            choice_path_2.config(state='normal')
+            choice_path_3.config(state='normal') 
+            choice_filename_1.config(state='normal')
+            choice_filename_2.config(state='normal')  
+        elif export_output_mode.get() == "disable":
+            entries['custom_output_param_entry'].delete(0, tk.END)                 
+            entries['custom_output_param_entry'].insert(0, '')                
+            entries['custom_output_param_entry'].configure(state='disable')
+            entries['custom_export_entry'].configure(state='disable')
+            entries['filename_template_param_entry'].configure(state='disable')
+            browse_export_btn.configure(state='disable')                            
+            choice_path_1.config(state='disabled')
+            choice_path_2.config(state='disabled')
+            choice_path_3.config(state='disabled')
+            choice_filename_1.config(state='disabled')
+            choice_filename_2.config(state='disabled')
+            
+    export_output_mode.trace_add("write", update_custom_output_visibility)
+    update_custom_output_visibility()
+    
+    
+
+
+    
+    
+
+
+    thirdpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    thirdpart_group.grid(row=4, column=0,  sticky='nswe', padx=15, pady=15)
+
+    error_label = tk.Label(thirdpart_group, text="", fg="red")
+    error_label.grid(row=0, column=0, columnspan=2, sticky='w')
+              
     def save():
             name = entries['name'].get()
-            short = entries['short'].get()  # Define 'short' here
+            # short_new = entries['short'].get()
+            short = entries['short'].get()
             template = entries['template'].get()
+            custom_path = entries['custom_soft_entry'].get().strip()
             arg_count = count_placeholders(template)
             arg_names_str = entries['arg_names'].get()
+            custom_filename_template = entries['filename_template_param_entry'].get().strip()  
+            custom_output_flag = entries['custom_output_param_entry'].get()
+            custom_export_entry = entries['custom_export_entry'].get().strip()
             arg_names = [s.strip() for s in arg_names_str.split(',') if s.strip()] if arg_names_str else []
 
-            # Validate shortname first
+            # Validate shortname
+            # if not re.match(r"^[a-zA-Z0-9\-]+$", short_new):
             if not re.match(r"^[a-zA-Z0-9\-]+$", short):
                 error_label.config(text="Profile Shortname must only contain letters, numbers, or dashes.")
                 return
 
+            # Check if the new shortname already exists (and it's not the original shortname)
+            # if short_new != short and short_new in profiles:
             if short in profiles:
                 error_label.config(text="Profile Shortname must be unique.")
                 return
 
+            if arg_count > 0 and not arg_names_str:
+                error_label.config(text="Argument names are required for templates with placeholders.")
+                return
+
+            # if export_output_mode.get() != "disable":
+                # if len(custom_filename_template) == 0:
+                    # error_label.config(text="Custom Output Filename Template cannot be empty.")
+                    # return
                 
             if len(name) == 0:
                 error_label.config(text="Profile Display name cannot be empty.")
                 return
-                
-            if arg_count > 0 and not arg_names_str:
-                 error_label.config(text="Argument names are required for templates with placeholders.")
-                 return
 
             if len(arg_names) != arg_count:
-                error_label.config(text=f"Template has {arg_count} arguments placeholders, but you provided {len(arg_names)} argument names.")
+                error_label.config(text=f"Template has {arg_count} arguments placeholders, but {len(arg_names)} argument names were provided.")
                 return
 
+            # if short_new != original_short:
+                # del profiles[original_short]
+    
+
             if export_mode.get() == "custom":
-                custom_export_path = custom_export_entry.get().strip()
-                custom_output_flag = custom_output_entry.get().strip()
-                if len(custom_export_path) == 0:
-                    error_label.config(text="Custom Export Folder Path cannot be empty.")
-                    return           
-            else:
-                custom_export_path = ""
-                custom_output_flag = ""
+                if len(custom_export_entry) == 0:
+                    error_label.config(text="Custom Output Path cannot be empty.")
+                    return                     
+                # custom_export_path = custom_export_entry
 
             profiles[short] = {
+            # profiles[short_new] = {
                 "display_name": name,
                 "shortname": short,
+                "path_mode": path_mode.get(),
+                "program_path": custom_path,
                 "command_template": template,
-                "custom_path": entries['custom_path'].get().strip(),
                 "arg_names": arg_names,
+                "export_output_mode": export_output_mode.get(),
+                "custom_output_flag": custom_output_flag,
                 "export_mode": export_mode.get(),
-                "custom_export_path": custom_export_path,
-                "custom_output_flag": custom_output_flag
+                "custom_export_path": custom_export_entry,
+                "filename_mode": filenametemplate_mode.get(),
+                "custom_filename_template": custom_filename_template
             }
+            
             save_profiles(profiles)
             refresh_profiles()
             top.destroy()
 
-    ttk.Button(top, text="Save", command=save).grid(row=9, column=1, pady=10, sticky='e')
-
-
-def choose_file(entry_field, top):
-    top.attributes("-topmost", False)
+    save_btn = ttk.Button(thirdpart_group, text="Save", command=save)
+    save_btn.grid(row=1, column=0, pady=10, sticky='w')
+    
+def choose_file(entry_field, place):
+    place.attributes("-topmost", False)
     path = filedialog.askopenfilename()
-    top.attributes("-topmost", True)
+    place.attributes("-topmost", True)
     if path:
         entry_field.delete(0, tk.END)
         entry_field.insert(0, path)
 
-def choose_folder(entry_widget, top):
-    top.attributes("-topmost", False)
+def choose_folder(entry_widget, place):
+    place.attributes("-topmost", False)
     path = filedialog.askdirectory()
-    top.attributes("-topmost", True)
+    place.attributes("-topmost", True)
     if path:
         entry_widget.delete(0, tk.END)
         entry_widget.insert(0, path)
@@ -553,74 +755,226 @@ def edit_profile():
     top.title("Edit profile")
     top.resizable(False, False)
     top.iconbitmap(os.path.join(BASE_DIR, "icon.ico"))
-    top.attributes("-topmost", True)
-    center_window(top, width=580, height=370)  # Adjust dimensions as needed
+    # top.attributes("-topmost", True)
+    center_window(top, width=642, height=600)  # Adjust dimensions as needed  ❔ add 20
 
 
     entries = {}
 
-    def labeled_entry(label, row, val):
-        tk.Label(top, text=label).grid(row=row, column=0, sticky='e')
-        e = tk.Entry(top, width=40)
+    def labeled_entry(label, row, val, place, tooptip):
+        f = tk.Label(place, text=label)
+        f.grid(row=row, column=0, sticky='w', padx=15, pady=5)
+        e = tk.Entry(place, width=40)
         e.insert(0, val)
-        e.grid(row=row, column=1, padx=5, pady=2)
+        
+        # if settings == activate tooltip
+        Tooltip(f, "")  
+        e.grid(row=row, column=1, padx=15, pady=2)
         return e
 
-    entries['name'] = labeled_entry("Profile Display Name:", 0, profile['display_name'])
-    entries['short'] = labeled_entry("Profile Shortname:", 1, profile['shortname'])
-    entries['template'] = labeled_entry("Command Template:", 2, profile['command_template'])
-    entries['arg_names'] = labeled_entry(
-        "Argument Names (comma-separated):", 3, ",".join(profile.get("arg_names", []))
-    )
+
+    firstpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    firstpart_group.grid(row=0, column=0,  sticky='nswe')
     
+    entries['name'] = labeled_entry("Profile Display Name:", 0, profile['display_name'], firstpart_group, "")
+    entries['short'] = labeled_entry("Profile Shortname:", 1, profile['shortname'], firstpart_group, "")
+
+    separator = ttk.Separator(firstpart_group, orient='horizontal')
+    separator.grid(row=2, column=0, columnspan=3, sticky='nswe', pady=10)
+
+
+ 
+    frame_inline = tk.LabelFrame(firstpart_group, text="Program Path")
+    frame_inline.grid(row=3, column=0,  sticky='w', padx=15)
+    
+    path_mode = tk.StringVar(value=profile.get("path_mode", "default"))
+    rb1 = tk.Radiobutton(frame_inline, text="Default (as per settings)", variable=path_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
+    rb2 = tk.Radiobutton(frame_inline, text="Custom (for this Profile)", variable=path_mode, value="custom").grid(row=1, column=0, sticky='w', columnspan=2)
+    
+    entries['custom_soft_entry'] = tk.Entry(firstpart_group, width=40)
+    entries['custom_soft_entry'].insert(0, profile['program_path'])
+    entries['custom_soft_entry'].grid(row=3, column=1, padx=15, pady=(0,5), sticky='sw')
+    browse_btn = ttk.Button(firstpart_group, text="Browse", command=lambda: choose_file(entries['custom_soft_entry'], top))
+    browse_btn.grid(row=3, column=2, padx=5, sticky='sw')
+
+    def update_custom_path_mode(*args):
+        entries['custom_soft_entry'].configure(state='normal')                 
+        browse_btn.configure(state='normal')          
+        if path_mode.get() == "custom":   
+            entries['custom_soft_entry'].delete(0, tk.END) 
+            entries['custom_soft_entry'].insert(0, profile['program_path'])                       
+        else:
+            entries['custom_soft_entry'].delete(0, tk.END) 
+            entries['custom_soft_entry'].insert(0, settings['DEFAULT'].get('software_path', ''))
+            entries['custom_soft_entry'].configure(state='disable')
+            browse_btn.configure(state='disable')
+
+    path_mode.trace_add("write", update_custom_path_mode)
+    update_custom_path_mode()
+    
+    entries['template'] = labeled_entry("Command Template:", 4, profile['command_template'], firstpart_group, "")
+    entries['arg_names'] = labeled_entry("Argument(s) Name(s) (comma-separated):", 5, ",".join(profile.get("arg_names", [])), firstpart_group, "")
+ 
+    separator = ttk.Separator(firstpart_group, orient='horizontal')
+    separator.grid(row=6, column=0, columnspan=3, sticky='nswe', pady=10)
+    
+    
+    
+    
+    
+    output_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    output_group.grid(row=1, column=0,  sticky='nswe')
+    export_output_mode = tk.StringVar(value=profile.get("export_output_mode", "default"))
+    exportparam_group = tk.LabelFrame(output_group, text="Output Parameter")
+    exportparam_group.grid(row=0, column=0,  sticky='w', padx=15)
+    tk.Radiobutton(exportparam_group, text="Default (as per settings)  ", variable=export_output_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
+    tk.Radiobutton(exportparam_group, text="Disable Output", variable=export_output_mode, value="disable").grid(row=1, column=0, sticky='w', columnspan=2)
+    tk.Radiobutton(exportparam_group, text="Custom (for this Profile)", variable=export_output_mode, value="custom").grid(row=2, column=0, sticky='w')    
+    exportparam_groupright = tk.LabelFrame(output_group, borderwidth = 0, highlightthickness = 0)
+    exportparam_groupright.grid(row=0, column=1,  sticky='s')
+    entries['custom_output_param_entry'] = tk.Entry(exportparam_groupright, width=40)
+    entries['custom_output_param_entry'].insert(0, profile['custom_output_flag'])
+    entries['custom_output_param_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
+
+    
+    secondpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    secondpart_group.grid(row=2, column=0,  sticky='nswe')
     export_mode = tk.StringVar(value=profile.get("export_mode", "default"))
-
-    # Frame for radio buttons
-    export_group = tk.LabelFrame(top, text="Export Folder Mode")
-    export_group.grid(row=5, column=0,  sticky='e')
+    export_group = tk.LabelFrame(secondpart_group, text="Output Path")
+    export_group.grid(row=0, column=0,  sticky='w', padx=15)
+    choice_path_1 = tk.Radiobutton(export_group, text="Default (as per settings) ", variable=export_mode, value="default")
+    choice_path_1.grid(row=0, column=0, sticky='w', columnspan=2)
+    choice_path_2 = tk.Radiobutton(export_group, text="Variable (as per location)", variable=export_mode, value="software")
+    choice_path_2.grid(row=1, column=0, sticky='w')    
+    choice_path_3 = tk.Radiobutton(export_group, text="Custom (for this Profile)", variable=export_mode, value="custom")
+    choice_path_3.grid(row=2, column=0, sticky='w', columnspan=2)
+    export_groupright = tk.LabelFrame(secondpart_group, borderwidth = 0, highlightthickness = 0)
+    export_groupright.grid(row=0, column=1,  sticky='s')
+    entries['custom_export_entry'] = tk.Entry(export_groupright, width=40)
+    entries['custom_export_entry'].insert(0, profile['custom_export_path'])
+    browse_export_btn = ttk.Button(export_groupright, text="Browse", command=lambda: choose_folder(entries['custom_export_entry'], top))
+    entries['custom_export_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
+    browse_export_btn.grid(row=0, column=1, padx=20, sticky='w')
+ 
+ 
+    filename_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    filename_group.grid(row=3, column=0,  sticky='nswe')
+    filenametemplate_mode = tk.StringVar(value=profile.get("filename_mode", "default"))
+    template_group = tk.LabelFrame(filename_group, text="Output Filename Template")
+    template_group.grid(row=0, column=0,  sticky='w', padx=15)
+    choice_filename_1 = tk.Radiobutton(template_group, text="Default (as per settings)  ", variable=filenametemplate_mode, value="default")
+    choice_filename_1.grid(row=0, column=0, sticky='w', columnspan=2)
+    choice_filename_2 = tk.Radiobutton(template_group, text="Custom (for this Profile)", variable=filenametemplate_mode, value="custom")
+    choice_filename_2.grid(row=1, column=0, sticky='w')    
+    filenameparam_groupright = tk.LabelFrame(filename_group, borderwidth = 0, highlightthickness = 0)
+    filenameparam_groupright.grid(row=0, column=1,  sticky='s')
+    entries['filename_template_param_entry'] = tk.Entry(filenameparam_groupright, width=40)
+    entries['filename_template_param_entry'].insert(0, profile['custom_filename_template'])
+    entries['filename_template_param_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
     
-    tk.Radiobutton(export_group, text="Use default", variable=export_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
-    tk.Radiobutton(export_group, text="Use custom", variable=export_mode, value="custom").grid(row=1, column=0, sticky='w', columnspan=2)
-    tk.Radiobutton(export_group, text="Do not use export", variable=export_mode, value="none").grid(row=2, column=0, sticky='w', columnspan=2)
-
-    custom_frame = tk.Frame(top)
+     
     
-    custom_output_label = tk.Label(custom_frame, text="Custom Output Path Parameter:")
-    custom_output_label.grid(row=6, column=0, sticky='e')    
-    custom_output_entry = tk.Entry(custom_frame, width=40)
-    custom_output_entry.grid(row=6, column=1, padx=5, pady=2)
-    
-    custom_export_label = tk.Label(custom_frame, text="Custom Export Folder Path:")
-    custom_export_label.grid(row=7, column=0, sticky='e')    
-    custom_export_entry = tk.Entry(custom_frame, width=40)
-    custom_export_entry.grid(row=7, column=1, padx=5, pady=2)    
-    browse_export_btn = ttk.Button(custom_frame, text="Browse", command=lambda: choose_folder(custom_export_entry))
-    browse_export_btn.grid(row=7, column=2, padx=5)
     
     def update_custom_export_visibility(*args):
+        entries['custom_export_entry'].configure(state='normal')                 
+        browse_export_btn.configure(state='normal')  
         if export_mode.get() == "custom":
-            custom_frame.grid(row=6, column=0, columnspan=3,  padx=5, pady=2, sticky='e')
-        else:
-            custom_frame.grid_remove()
+            entries['custom_export_entry'].delete(0, tk.END) 
+            entries['custom_export_entry'].insert(0, profile['custom_export_path'])            
+        elif export_mode.get() == "default":
+            entries['custom_export_entry'].delete(0, tk.END) 
+            entries['custom_export_entry'].insert(0, settings['DEFAULT'].get('output_folder', ''))
+            entries['custom_export_entry'].configure(state='disable')
+            browse_export_btn.configure(state='disable')            
+        elif export_mode.get() == "software":
+            entries['custom_export_entry'].delete(0, tk.END)                 
+            entries['custom_export_entry'].insert(0, '')                
+            entries['custom_export_entry'].configure(state='disable')
+            browse_export_btn.configure(state='disable')
 
     export_mode.trace_add("write", update_custom_export_visibility)
     update_custom_export_visibility()
 
 
 
-    entries['custom_path'] = labeled_entry("Custom Program Path (optional):", 4, profile.get("custom_path", ""))
-    browse_btn = ttk.Button(top, text="Browse", command=lambda: choose_file(entries['custom_path'], top))
-    browse_btn.grid(row=4, column=2, padx=5)
+    def update_custom_filename_visibility(*args):
+        entries['filename_template_param_entry'].configure(state='normal')                 
+        if filenametemplate_mode.get() == "custom":
+            entries['filename_template_param_entry'].delete(0, tk.END) 
+            entries['filename_template_param_entry'].insert(0, profile['custom_filename_template'])            
+        elif filenametemplate_mode.get() == "default":
+            entries['filename_template_param_entry'].delete(0, tk.END) 
+            entries['filename_template_param_entry'].insert(0, settings['DEFAULT'].get('filename_template', ''))
+            entries['filename_template_param_entry'].configure(state='disable')          
+
+    filenametemplate_mode.trace_add("write", update_custom_filename_visibility)
+    update_custom_filename_visibility()
     
-    error_label = tk.Label(top, text="", fg="red")
-    error_label.grid(row=8, column=0, columnspan=2, sticky='e')
+    
+    
+
+    def update_custom_output_visibility(*args):
+        entries['custom_output_param_entry'].configure(state='normal')  
+        if export_output_mode.get() == "custom":
+            entries['custom_output_param_entry'].delete(0, tk.END) 
+            entries['custom_output_param_entry'].insert(0, profile['custom_output_flag'])            
+            update_custom_export_visibility()
+            update_custom_filename_visibility()
+            choice_path_1.config(state='normal')
+            choice_path_2.config(state='normal')
+            choice_path_3.config(state='normal') 
+            choice_filename_1.config(state='normal')
+            choice_filename_2.config(state='normal')            
+        elif export_output_mode.get() == "default":
+            entries['custom_output_param_entry'].delete(0, tk.END) 
+            entries['custom_output_param_entry'].insert(0, settings['DEFAULT'].get('output_parameter', ''))
+            entries['custom_output_param_entry'].configure(state='disable')
+            update_custom_export_visibility()
+            update_custom_filename_visibility()
+            choice_path_1.config(state='normal')
+            choice_path_2.config(state='normal')
+            choice_path_3.config(state='normal') 
+            choice_filename_1.config(state='normal')
+            choice_filename_2.config(state='normal')  
+        elif export_output_mode.get() == "disable":
+            entries['custom_output_param_entry'].delete(0, tk.END)                 
+            entries['custom_output_param_entry'].insert(0, '')                
+            entries['custom_output_param_entry'].configure(state='disable')
+            entries['custom_export_entry'].configure(state='disable')
+            entries['filename_template_param_entry'].configure(state='disable')
+            browse_export_btn.configure(state='disable')                            
+            choice_path_1.config(state='disabled')
+            choice_path_2.config(state='disabled')
+            choice_path_3.config(state='disabled')
+            choice_filename_1.config(state='disabled')
+            choice_filename_2.config(state='disabled')
+            
+    export_output_mode.trace_add("write", update_custom_output_visibility)
+    update_custom_output_visibility()
+    
+    
+
+
+    
+    
+
+
+    thirdpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
+    thirdpart_group.grid(row=4, column=0,  sticky='nswe', padx=15, pady=15)
+
+    error_label = tk.Label(thirdpart_group, text="", fg="red")
+    error_label.grid(row=0, column=0, columnspan=2, sticky='w')
               
     def save():
             name = entries['name'].get()
             short_new = entries['short'].get()
             template = entries['template'].get()
+            custom_path = entries['custom_soft_entry'].get().strip()
             arg_count = count_placeholders(template)
             arg_names_str = entries['arg_names'].get()
+            custom_filename_template = entries['filename_template_param_entry'].get().strip()  
+            custom_output_flag = entries['custom_output_param_entry'].get()
+            custom_export_entry = entries['custom_export_entry'].get().strip()
             arg_names = [s.strip() for s in arg_names_str.split(',') if s.strip()] if arg_names_str else []
 
             # Validate shortname
@@ -637,50 +991,51 @@ def edit_profile():
                 error_label.config(text="Argument names are required for templates with placeholders.")
                 return
 
+            # if export_output_mode.get() != "disable":
+                # if len(custom_filename_template) == 0:
+                    # error_label.config(text="Custom Output Filename Template cannot be empty.")
+                    # return
+                
             if len(name) == 0:
                 error_label.config(text="Profile Display name cannot be empty.")
                 return
-                
+
             if len(arg_names) != arg_count:
                 error_label.config(text=f"Template has {arg_count} arguments placeholders, but {len(arg_names)} argument names were provided.")
                 return
-
-            # If the shortname was changed, remove the old profile
-            # if short_new != short:
-                # del profiles[short]
 
             if short_new != original_short:
                 del profiles[original_short]
     
 
             if export_mode.get() == "custom":
-                custom_export_path = custom_export_entry.get().strip()
-                custom_output_flag = custom_output_entry.get().strip()
-                if len(custom_export_path) == 0:
-                    error_label.config(text="Custom Export Folder Path cannot be empty.")
-                    return                       
-            else:
-                custom_export_path = ""
-                custom_output_flag = ""
+                if len(custom_export_entry) == 0:
+                    error_label.config(text="Custom Output Path cannot be empty.")
+                    return                     
+                # custom_export_path = custom_export_entry
 
             # profiles[short] = {
             profiles[short_new] = {
                 "display_name": name,
                 "shortname": short_new,
+                "path_mode": path_mode.get(),
+                "program_path": custom_path,
                 "command_template": template,
-                "custom_path": entries['custom_path'].get().strip(),
                 "arg_names": arg_names,
+                "export_output_mode": export_output_mode.get(),
+                "custom_output_flag": custom_output_flag,
                 "export_mode": export_mode.get(),
-                "custom_export_path": custom_export_path,
-                "custom_output_flag": custom_output_flag
+                "custom_export_path": custom_export_entry,
+                "filename_mode": filenametemplate_mode.get(),
+                "custom_filename_template": custom_filename_template
             }
             
             save_profiles(profiles)
             refresh_profiles()
             top.destroy()
 
-    ttk.Button(top, text="Save", command=save).grid(row=9, column=1, pady=10, sticky='e')
-
+    save_btn = ttk.Button(thirdpart_group, text="Save", command=save)
+    save_btn.grid(row=1, column=0, pady=10, sticky='w')
 
 
 def custom_confirm_dialog(title, message):
@@ -703,8 +1058,7 @@ def custom_confirm_dialog(title, message):
 
     top.wait_window()
     return result["confirmed"]
-    
-    
+        
 def custom_info_dialog(title, message):
     root.focus_set()
     top = tk.Toplevel(root)
@@ -719,7 +1073,6 @@ def custom_info_dialog(title, message):
     ttk.Button(top, text="OK", command=top.destroy).pack(pady=(0, 10))
 
     top.wait_window()
-
     
 def delete_profile():
     root.focus_set()
@@ -761,7 +1114,6 @@ def custom_input_popup(title, prompt, icon_path="icon.ico"):
     top.wait_window()
     return user_input
 
-
 def on_profile_double_click(event=None):
     short = get_selected_shortname()
     if not short:
@@ -783,8 +1135,6 @@ def on_profile_double_click(event=None):
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
-
-
 def open_settings_window():
     root.focus_set()
     top = tk.Toplevel(root)
@@ -792,18 +1142,28 @@ def open_settings_window():
     top.title("Settings")
     top.resizable(False, False)
     top.iconbitmap(os.path.join(BASE_DIR, "icon.ico"))
-    center_window(top, width=500, height=250)
+    center_window(top, width=600, height=250)
 
-    tk.Label(top, text="Program Path").grid(row=0, column=0, sticky='e', padx=10, pady=5)
+    tk.Label(top, text="Program Path:").grid(row=0, column=0, sticky='w', padx=10, pady=5)
     yt_entry = tk.Entry(top, width=40)
     yt_entry.insert(0, settings['DEFAULT'].get('software_path', ''))
     yt_entry.grid(row=0, column=1, padx=10, pady=5)
 
-    tk.Label(top, text="Export Folder Path").grid(row=1, column=0, sticky='e', padx=10, pady=5)
+    tk.Label(top, text="Output Parameter (optional):").grid(row=1, column=0, sticky='w', padx=10, pady=5)
+    param_entry = tk.Entry(top, width=40)
+    param_entry.insert(0, settings['DEFAULT'].get('output_parameter', ''))
+    param_entry.grid(row=1, column=1, padx=10, pady=5)
+    
+    tk.Label(top, text="Output Path (optional):").grid(row=2, column=0, sticky='w', padx=10, pady=5)
     folder_entry = tk.Entry(top, width=40)
     folder_entry.insert(0, settings['DEFAULT'].get('output_folder', ''))
-    folder_entry.grid(row=1, column=1, padx=10, pady=5)
+    folder_entry.grid(row=2, column=1, padx=10, pady=5)
 
+    tk.Label(top, text="Output Filename Template (optional):").grid(row=3, column=0, sticky='w', padx=10, pady=5)
+    filenametemplate_entry = tk.Entry(top, width=40)
+    filenametemplate_entry.insert(0, settings['DEFAULT'].get('filename_template', ''))
+    filenametemplate_entry.grid(row=3, column=1, padx=10, pady=5)
+    
     def browse_folder():
         top.attributes("-topmost", False)
         folder = filedialog.askdirectory()
@@ -812,21 +1172,21 @@ def open_settings_window():
             folder_entry.delete(0, tk.END)
             folder_entry.insert(0, folder)
 
-    ttk.Button(top, text="Browse", command=browse_folder).grid(row=1, column=2, padx=5)
+    ttk.Button(top, text="Browse", command=browse_folder).grid(row=2, column=2, padx=5)
 
-    use_custom = tk.BooleanVar(value=settings['DEFAULT'].getboolean('use_custom_output', False))
-    tk.Checkbutton(top, text="Use Export Folder", variable=use_custom).grid(row=2, column=1, sticky='w', pady=5)
+    # use_custom = tk.BooleanVar(value=settings['DEFAULT'].getboolean('use_custom_output', False))
+    # tk.Checkbutton(top, text="Use Output Folder", variable=use_custom).grid(row=4, column=1, sticky='w', pady=5)
 
     def save():
         settings['DEFAULT']['software_path'] = yt_entry.get()
+        settings['DEFAULT']['output_parameter'] = param_entry.get()
         settings['DEFAULT']['output_folder'] = folder_entry.get()
-        settings['DEFAULT']['use_custom_output'] = str(use_custom.get())
+        settings['DEFAULT']['filename_template'] = filenametemplate_entry.get().strip()
+        # settings['DEFAULT']['use_custom_output'] = str(use_custom.get())
         save_settings(settings)
         top.destroy()
 
-    ttk.Button(top, text="Save", command=save).grid(row=3, column=1, sticky='e', pady=10)
-
-
+    ttk.Button(top, text="Save", command=save).grid(row=5, column=1, sticky='e', pady=10)
 
 def open_about_window():
     root.focus_set()
@@ -839,14 +1199,11 @@ def open_about_window():
 
     tk.Label(top, text="arGUIments \nv1.0.0\nCreated with ❤️\nby hycday", font=("Segoe UI", 10)).pack(pady=(10, 5))
 
- 
-    
 def clear_console():
     console_output.configure(state='normal')
     console_output.delete("1.0", tk.END)
     console_output.configure(state='disabled')
     progressvar.set(0)
- 
  
 def center_window_main(win, width=1200, height=600):
     win.update_idletasks()
@@ -856,7 +1213,6 @@ def center_window_main(win, width=1200, height=600):
     y = (screen_height // 2) - (height // 2)
     win.geometry(f"{width}x{height}+{x}+{y}")
 
-
 # GUI layout
 def refresh_profiles():
     profile_listbox.delete(0, tk.END)
@@ -865,8 +1221,6 @@ def refresh_profiles():
     for key in profile_keys:
         profile_listbox.insert(tk.END, profiles[key]["display_name"])
 
-
-       
 def toggle_console():
     if console_visible.get():
         right_frame.pack_forget()
@@ -883,8 +1237,6 @@ def toggle_console():
         console_visible.set(True)
         root.resizable(False, False)
 
-
-        
 def append_console_output(text, tag=None):
     # Enable writing to the widget
     console_output.configure(state='normal')
@@ -918,8 +1270,6 @@ def append_console_output(text, tag=None):
     # Force the GUI to update to show the new text immediately
     root.update_idletasks()
 
-
-
 if __name__ == "__main__":
     
 # ========= COMMAND-LINE MODE ===========
@@ -937,8 +1287,8 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[ERROR] {e}")
         sys.exit(0)
-    else:
-        print("Provide a profile shortname as first argument if running via command line.")
+    # else:
+        # print("Provide a profile shortname as first argument if running via command line.")
         
     # ========= GUI MODE ===========
     root = tk.Tk()

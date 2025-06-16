@@ -16,12 +16,15 @@ SETTINGS_FILE = "settings.ini"
 
 
 def load_settings():
-    config = configparser.ConfigParser()
+    # config = configparser.ConfigParser()
+    config = configparser.ConfigParser(interpolation=None)
     if not os.path.exists(SETTINGS_FILE):
         config['DEFAULT'] = {
-            'software_path': '',
+            'software_path': 'yt-dlp',
+            'output_parameter': '--output',
             'output_folder': '',
-            'use_custom_output': 'False'
+            'filename_template': '%(title)s.%(ext)s',
+            # 'use_custom_output': 'False'
         }
         with open(SETTINGS_FILE, 'w') as f:
             config.write(f)
@@ -39,41 +42,60 @@ profiles = load_profiles()
 settings = load_settings()
 
 def build_command(shortname, user_args):
-  
+      
     profile = profiles.get(shortname)
     if not profile:
         raise ValueError("Profile not found.")
 
-    template = profile['command_template']
+    command_template = profile['command_template']
     try:
-        args = shlex.split(template.format(*user_args))
+        args = shlex.split(command_template.format(*user_args))
     except IndexError as e:
         raise ValueError(f"Missing arguments: {e}")
 
-    yt_path = profile.get("custom_path") or settings['DEFAULT'].get('software_path')
+    path_mode = profile.get("path_mode", "default")
     
-    if not yt_path:
+    if path_mode == "default":
+        software_path = settings['DEFAULT'].get('software_path')
+    elif path_mode == "custom":
+        software_path = profile.get("program_path")
+    
+    if not software_path:
         raise ValueError("Software path is not defined in settings or in profile.")
-        
-    command = [yt_path] + args
+    
+    command = [software_path] + args
 
+
+    flag = None
+    exportmode = profile.get("export_output_mode")
+    if exportmode == "default":
+        flag = settings['DEFAULT'].get('output_parameter')
+    elif exportmode == "custom":
+        flag = profile.get("custom_output_flag")       
+    
+    folder = None
     mode = profile.get("export_mode", "default")
-    flag = profile.get("custom_output_flag", "--output")
-    folder = ""
-
-    if mode == "default" and settings['DEFAULT'].getboolean('use_custom_output', False):
-        folder = settings['DEFAULT'].get('output_folder', '')
+    if mode == "default":
+        folder = settings['DEFAULT'].get('output_folder')
+    elif mode == "software":
+        folder = ''
     elif mode == "custom":
-        folder = profile.get("custom_export_path", "")
-
-    if folder and mode != "none":
-        command += [flag, f"{folder}/%(title)s.%(ext)s"]
+        folder = profile.get("custom_export_path", "")        
         
-    if settings['DEFAULT'].getboolean('use_custom_output', False):
-        out_folder = settings['DEFAULT'].get('output_folder', '')
-        if out_folder:
-            command += ['--output', f'{out_folder}/%(title)s.%(ext)s']
-
+    template = None
+    template_name = profile.get("filename_mode")
+    if template_name == "default":
+        template = settings['DEFAULT'].get('filename_template')
+    elif template_name == "custom":
+        template = profile.get("custom_filename_template")       
+        
+        
+    if exportmode != "disable":
+        if folder == "":
+            command += [flag, f"{template}"]
+        else:
+            command += [flag, f"{folder}/{template}"]
+        
     return command
     
 if __name__ == "__main__":
