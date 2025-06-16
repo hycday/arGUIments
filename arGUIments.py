@@ -53,15 +53,25 @@ yt_process = None
 
 
 class Tooltip:
-    def __init__(self, widget, text):
+    def __init__(self, widget, text, showtool=False):
         self.widget = widget
         self.text = text
         self.tip = None
+        self.showtool = showtool
+
+        # Always bind; tooltip visibility is controlled at hover-time
         self.widget.bind("<Enter>", self.on_enter)
         self.widget.bind("<Leave>", self.on_leave)
 
     def on_enter(self, event=None):
-        self.show_tooltip()
+        # Use dynamic check on showtool to allow runtime control
+        try:
+            from __main__ import showtipsvalue
+            if self.showtool or showtipsvalue:
+                self.show_tooltip()
+        except ImportError:
+            if self.showtool:
+                self.show_tooltip()
 
     def on_leave(self, event=None):
         self.hide_tooltip()
@@ -74,7 +84,14 @@ class Tooltip:
         self.tip = tk.Toplevel(self.widget)
         self.tip.wm_overrideredirect(True)
         self.tip.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(self.tip, text=self.text, background="lightyellow", borderwidth=1, relief="solid", font=("Segoe UI", 9))
+        label = tk.Label(
+            self.tip,
+            text=self.text,
+            background="lightyellow",
+            borderwidth=1,
+            relief="solid",
+            font=("Segoe UI", 9)
+        )
         label.pack(ipadx=5, ipady=2)
 
     def hide_tooltip(self):
@@ -83,27 +100,33 @@ class Tooltip:
             self.tip = None
 
 
+
 # ============ SETTINGS =============
 def load_settings():
+    global showtipsvalue
     # config = configparser.ConfigParser()
     config = configparser.ConfigParser(interpolation=None)
     if not os.path.exists(SETTINGS_FILE):
         config['DEFAULT'] = {
             'software_path': 'yt-dlp',
-            'output_parameter': '--output',
+            'output_flag': '--output',
             'output_folder': '',
             'filename_template': '%(title)s.%(ext)s',
-            # 'use_custom_output': 'False'
+            'show_hints': 'True'
         }
         with open(SETTINGS_FILE, 'w') as f:
             config.write(f)
     else:
         config.read(SETTINGS_FILE)
+    showtipsvalue = config['DEFAULT'].getboolean('show_hints', '')
     return config
 
 def save_settings(config):
+    global showtipsvalue
+    showtipsvalue = config['DEFAULT'].getboolean('show_hints', '')
     with open(SETTINGS_FILE, 'w') as f:
         config.write(f)
+    
 
 settings = load_settings()
 
@@ -149,7 +172,7 @@ def build_command(shortname, user_args):
     flag = None
     exportmode = profile.get("export_output_mode")
     if exportmode == "default":
-        flag = settings['DEFAULT'].get('output_parameter')
+        flag = settings['DEFAULT'].get('output_flag')
     elif exportmode == "custom":
         flag = profile.get("custom_output_flag")       
     
@@ -160,7 +183,7 @@ def build_command(shortname, user_args):
     elif mode == "software":
         folder = ''
     elif mode == "custom":
-        folder = profile.get("custom_export_path", "")        
+        folder = profile.get("custom_output_folder", "")        
         
     template = None
     template_name = profile.get("filename_mode")
@@ -432,6 +455,7 @@ def run_command_threaded(command):
 
 # ============ GUI =============
 def add_profile():
+    global showtipsvalue
     root.focus_set()
 
     top = tk.Toplevel(root)
@@ -450,8 +474,8 @@ def add_profile():
         f.grid(row=row, column=0, sticky='w', padx=15, pady=5)
         e = tk.Entry(place, width=40)
         
-        # if settings == activate tooltip
-        Tooltip(f, "")  
+        # Tooltip(entries['name'], "Test" ,showtipsvalue)
+        Tooltip(f, tooptip, showtipsvalue)  
         e.grid(row=row, column=1, padx=15, pady=2)
         return e
 
@@ -459,8 +483,8 @@ def add_profile():
     firstpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
     firstpart_group.grid(row=0, column=0,  sticky='nswe')
     
-    entries['name'] = labeled_entry("Profile Display Name:", 0, firstpart_group, "")
-    entries['short'] = labeled_entry("Profile Shortname:", 1, firstpart_group, "")
+    entries['name'] = labeled_entry("Profile Display Name:", 0, firstpart_group, "Profile name that will be shown on arGUIments' interface.")
+    entries['short'] = labeled_entry("Profile Shortname:", 1, firstpart_group, "Profile shortname to call this specific profile via arGUIments-console mode, as an argument.")
 
     separator = ttk.Separator(firstpart_group, orient='horizontal')
     separator.grid(row=2, column=0, columnspan=3, sticky='nswe', pady=10)
@@ -468,6 +492,7 @@ def add_profile():
 
  
     frame_inline = tk.LabelFrame(firstpart_group, text="Program Path")
+    Tooltip(frame_inline, "Path to the desired program you wish to create a profile for. \nDefault will use the one defined in settings. \nCustom will allow you to chose one specifically for this profile." ,showtipsvalue)
     frame_inline.grid(row=3, column=0,  sticky='w', padx=15)
     
     path_mode = tk.StringVar(value="default")
@@ -495,8 +520,8 @@ def add_profile():
     path_mode.trace_add("write", update_custom_path_mode)
     update_custom_path_mode()
     
-    entries['template'] = labeled_entry("Command Template:", 4, firstpart_group, "")
-    entries['arg_names'] = labeled_entry("Argument(s) Name(s) (comma-separated):", 5, firstpart_group, "")
+    entries['template'] = labeled_entry("Command Template:", 4, firstpart_group, "The argument(s) for the command line you wish to create a profile for. \nUse variables as {0}, {1} and so on. \nWhen you run the profile, you will be asked for the values.")
+    entries['arg_names'] = labeled_entry("Argument(s) Name(s) (comma-separated):", 5, firstpart_group, "The name of the argument(s) you have as variables, so that you can easily identify what they are when you run the profile.")
  
     separator = ttk.Separator(firstpart_group, orient='horizontal')
     separator.grid(row=6, column=0, columnspan=3, sticky='nswe', pady=10)
@@ -509,6 +534,7 @@ def add_profile():
     output_group.grid(row=1, column=0,  sticky='nswe')
     export_output_mode = tk.StringVar(value="default")
     exportparam_group = tk.LabelFrame(output_group, text="Output Parameter")
+    Tooltip(exportparam_group, "If your software allows for some export/output command, enter here the argument value to trigger such feature. \nThe value will depend and vary from the software you chose in Program Path. \nDefault will use the value from settings. \nDisable will void the feature for this profile (unless it is automatically done so as per the Command Template). \nCustom will allow you to set one specific for this profile." ,showtipsvalue)
     exportparam_group.grid(row=0, column=0,  sticky='w', padx=15)
     tk.Radiobutton(exportparam_group, text="Default (as per settings)  ", variable=export_output_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
     tk.Radiobutton(exportparam_group, text="Disable Output", variable=export_output_mode, value="disable").grid(row=1, column=0, sticky='w', columnspan=2)
@@ -524,6 +550,7 @@ def add_profile():
     secondpart_group.grid(row=2, column=0,  sticky='nswe')
     export_mode = tk.StringVar(value="default")
     export_group = tk.LabelFrame(secondpart_group, text="Output Path")
+    Tooltip(export_group, "If Output Parameter is not disabled, Output Path will allow you to chose a specific folder in which the export/output will be created in. \nDefault will use the value as per settings. \nVariable will use the folder from which arGUIments was ran from (note that if you added the path in which arGUIments is installed in, to the PATH environment variable, this will also work). \nCustom will allow you to chose a specific folder for this profile." ,showtipsvalue)    
     export_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_path_1 = tk.Radiobutton(export_group, text="Default (as per settings) ", variable=export_mode, value="default")
     choice_path_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -534,7 +561,7 @@ def add_profile():
     export_groupright = tk.LabelFrame(secondpart_group, borderwidth = 0, highlightthickness = 0)
     export_groupright.grid(row=0, column=1,  sticky='s')
     entries['custom_export_entry'] = tk.Entry(export_groupright, width=40)
-    # entries['custom_export_entry'].insert(0, profile['custom_export_path'])
+    # entries['custom_export_entry'].insert(0, profile['custom_output_folder'])
     browse_export_btn = ttk.Button(export_groupright, text="Browse", command=lambda: choose_folder(entries['custom_export_entry'], top))
     entries['custom_export_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
     browse_export_btn.grid(row=0, column=1, padx=20, sticky='w')
@@ -544,6 +571,7 @@ def add_profile():
     filename_group.grid(row=3, column=0,  sticky='nswe')
     filenametemplate_mode = tk.StringVar(value="default")
     template_group = tk.LabelFrame(filename_group, text="Output Filename Template")
+    Tooltip(template_group, "If Output Parameter is not disabled, Output Filename Template will allow you to chose a specific filename (or filename template) for your export/output. \nThe value you enter here can be a fixed filename (e.g. 'export.csv', 'video.mp4', and so on), or something more generic as per what the software from Program Path allows. \nDefault will use the value from settings. \nCustom will allow you to chose a specific one for this profile." ,showtipsvalue)
     template_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_filename_1 = tk.Radiobutton(template_group, text="Default (as per settings)  ", variable=filenametemplate_mode, value="default")
     choice_filename_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -563,7 +591,7 @@ def add_profile():
         browse_export_btn.configure(state='normal')  
         if export_mode.get() == "custom":
             entries['custom_export_entry'].delete(0, tk.END) 
-            # entries['custom_export_entry'].insert(0, profile['custom_export_path'])            
+            # entries['custom_export_entry'].insert(0, profile['custom_output_folder'])            
         elif export_mode.get() == "default":
             entries['custom_export_entry'].delete(0, tk.END) 
             entries['custom_export_entry'].insert(0, settings['DEFAULT'].get('output_folder', ''))
@@ -610,7 +638,7 @@ def add_profile():
             choice_filename_2.config(state='normal')            
         elif export_output_mode.get() == "default":
             entries['custom_output_param_entry'].delete(0, tk.END) 
-            entries['custom_output_param_entry'].insert(0, settings['DEFAULT'].get('output_parameter', ''))
+            entries['custom_output_param_entry'].insert(0, settings['DEFAULT'].get('output_flag', ''))
             entries['custom_output_param_entry'].configure(state='disable')
             update_custom_export_visibility()
             update_custom_filename_visibility()
@@ -698,7 +726,7 @@ def add_profile():
                 if len(custom_export_entry) == 0:
                     error_label.config(text="Custom Output Path cannot be empty.")
                     return                     
-                # custom_export_path = custom_export_entry
+                # custom_output_folder = custom_export_entry
 
             profiles[short] = {
             # profiles[short_new] = {
@@ -711,7 +739,7 @@ def add_profile():
                 "export_output_mode": export_output_mode.get(),
                 "custom_output_flag": custom_output_flag,
                 "export_mode": export_mode.get(),
-                "custom_export_path": custom_export_entry,
+                "custom_output_folder": custom_export_entry,
                 "filename_mode": filenametemplate_mode.get(),
                 "custom_filename_template": custom_filename_template
             }
@@ -741,6 +769,7 @@ def choose_folder(entry_widget, place):
 
 
 def edit_profile():
+    global showtipsvalue
     root.focus_set()
     short = get_selected_shortname()
     original_short = short
@@ -767,8 +796,7 @@ def edit_profile():
         e = tk.Entry(place, width=40)
         e.insert(0, val)
         
-        # if settings == activate tooltip
-        Tooltip(f, "")  
+        Tooltip(f, tooptip, showtipsvalue)   
         e.grid(row=row, column=1, padx=15, pady=2)
         return e
 
@@ -776,8 +804,8 @@ def edit_profile():
     firstpart_group = tk.LabelFrame(top, borderwidth = 0, highlightthickness = 0)
     firstpart_group.grid(row=0, column=0,  sticky='nswe')
     
-    entries['name'] = labeled_entry("Profile Display Name:", 0, profile['display_name'], firstpart_group, "")
-    entries['short'] = labeled_entry("Profile Shortname:", 1, profile['shortname'], firstpart_group, "")
+    entries['name'] = labeled_entry("Profile Display Name:", 0, profile['display_name'], firstpart_group, "Profile name that will be shown on arGUIments' interface.")
+    entries['short'] = labeled_entry("Profile Shortname:", 1, profile['shortname'], firstpart_group, "Profile shortname to call this specific profile via arGUIments-console mode, as an argument.")
 
     separator = ttk.Separator(firstpart_group, orient='horizontal')
     separator.grid(row=2, column=0, columnspan=3, sticky='nswe', pady=10)
@@ -785,6 +813,7 @@ def edit_profile():
 
  
     frame_inline = tk.LabelFrame(firstpart_group, text="Program Path")
+    Tooltip(frame_inline, "Path to the desired program you wish to create a profile for. \nDefault will use the one defined in settings. \nCustom will allow you to chose one specifically for this profile." ,showtipsvalue)
     frame_inline.grid(row=3, column=0,  sticky='w', padx=15)
     
     path_mode = tk.StringVar(value=profile.get("path_mode", "default"))
@@ -812,8 +841,8 @@ def edit_profile():
     path_mode.trace_add("write", update_custom_path_mode)
     update_custom_path_mode()
     
-    entries['template'] = labeled_entry("Command Template:", 4, profile['command_template'], firstpart_group, "")
-    entries['arg_names'] = labeled_entry("Argument(s) Name(s) (comma-separated):", 5, ",".join(profile.get("arg_names", [])), firstpart_group, "")
+    entries['template'] = labeled_entry("Command Template:", 4, profile['command_template'], firstpart_group, "The argument(s) for the command line you wish to create a profile for. \nUse variables as {0}, {1} and so on. \nWhen you run the profile, you will be asked for the values.")
+    entries['arg_names'] = labeled_entry("Argument(s) Name(s) (comma-separated):", 5, ",".join(profile.get("arg_names", [])), firstpart_group, "The name of the argument(s) you have as variables, so that you can easily identify what they are when you run the profile.")
  
     separator = ttk.Separator(firstpart_group, orient='horizontal')
     separator.grid(row=6, column=0, columnspan=3, sticky='nswe', pady=10)
@@ -826,6 +855,7 @@ def edit_profile():
     output_group.grid(row=1, column=0,  sticky='nswe')
     export_output_mode = tk.StringVar(value=profile.get("export_output_mode", "default"))
     exportparam_group = tk.LabelFrame(output_group, text="Output Parameter")
+    Tooltip(exportparam_group, "If your software allows for some export/output command, enter here the argument value to trigger such feature. \nThe value will depend and vary from the software you chose in Program Path. \nDefault will use the value from settings. \nDisable will void the feature for this profile (unless it is automatically done so as per the Command Template). \nCustom will allow you to set one specific for this profile." ,showtipsvalue)
     exportparam_group.grid(row=0, column=0,  sticky='w', padx=15)
     tk.Radiobutton(exportparam_group, text="Default (as per settings)  ", variable=export_output_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
     tk.Radiobutton(exportparam_group, text="Disable Output", variable=export_output_mode, value="disable").grid(row=1, column=0, sticky='w', columnspan=2)
@@ -841,6 +871,7 @@ def edit_profile():
     secondpart_group.grid(row=2, column=0,  sticky='nswe')
     export_mode = tk.StringVar(value=profile.get("export_mode", "default"))
     export_group = tk.LabelFrame(secondpart_group, text="Output Path")
+    Tooltip(export_group, "If Output Parameter is not disabled, Output Path will allow you to chose a specific folder in which the export/output will be created in. \nDefault will use the value as per settings. \nVariable will use the folder from which arGUIments was ran from (note that if you added the path in which arGUIments is installed in, to the PATH environment variable, this will also work). \nCustom will allow you to chose a specific folder for this profile." ,showtipsvalue)    
     export_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_path_1 = tk.Radiobutton(export_group, text="Default (as per settings) ", variable=export_mode, value="default")
     choice_path_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -851,7 +882,7 @@ def edit_profile():
     export_groupright = tk.LabelFrame(secondpart_group, borderwidth = 0, highlightthickness = 0)
     export_groupright.grid(row=0, column=1,  sticky='s')
     entries['custom_export_entry'] = tk.Entry(export_groupright, width=40)
-    entries['custom_export_entry'].insert(0, profile['custom_export_path'])
+    entries['custom_export_entry'].insert(0, profile['custom_output_folder'])
     browse_export_btn = ttk.Button(export_groupright, text="Browse", command=lambda: choose_folder(entries['custom_export_entry'], top))
     entries['custom_export_entry'].grid(row=0, column=0,sticky='sw', pady=(0,5), padx=(85,0))
     browse_export_btn.grid(row=0, column=1, padx=20, sticky='w')
@@ -861,6 +892,7 @@ def edit_profile():
     filename_group.grid(row=3, column=0,  sticky='nswe')
     filenametemplate_mode = tk.StringVar(value=profile.get("filename_mode", "default"))
     template_group = tk.LabelFrame(filename_group, text="Output Filename Template")
+    Tooltip(template_group, "If Output Parameter is not disabled, Output Filename Template will allow you to chose a specific filename (or filename template) for your export/output. \nThe value you enter here can be a fixed filename (e.g. 'export.csv', 'video.mp4', and so on), or something more generic as per what the software from Program Path allows. \nDefault will use the value from settings. \nCustom will allow you to chose a specific one for this profile." ,showtipsvalue)    
     template_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_filename_1 = tk.Radiobutton(template_group, text="Default (as per settings)  ", variable=filenametemplate_mode, value="default")
     choice_filename_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -880,7 +912,7 @@ def edit_profile():
         browse_export_btn.configure(state='normal')  
         if export_mode.get() == "custom":
             entries['custom_export_entry'].delete(0, tk.END) 
-            entries['custom_export_entry'].insert(0, profile['custom_export_path'])            
+            entries['custom_export_entry'].insert(0, profile['custom_output_folder'])            
         elif export_mode.get() == "default":
             entries['custom_export_entry'].delete(0, tk.END) 
             entries['custom_export_entry'].insert(0, settings['DEFAULT'].get('output_folder', ''))
@@ -927,7 +959,7 @@ def edit_profile():
             choice_filename_2.config(state='normal')            
         elif export_output_mode.get() == "default":
             entries['custom_output_param_entry'].delete(0, tk.END) 
-            entries['custom_output_param_entry'].insert(0, settings['DEFAULT'].get('output_parameter', ''))
+            entries['custom_output_param_entry'].insert(0, settings['DEFAULT'].get('output_flag', ''))
             entries['custom_output_param_entry'].configure(state='disable')
             update_custom_export_visibility()
             update_custom_filename_visibility()
@@ -1012,7 +1044,7 @@ def edit_profile():
                 if len(custom_export_entry) == 0:
                     error_label.config(text="Custom Output Path cannot be empty.")
                     return                     
-                # custom_export_path = custom_export_entry
+                # custom_output_folder = custom_export_entry
 
             # profiles[short] = {
             profiles[short_new] = {
@@ -1025,7 +1057,7 @@ def edit_profile():
                 "export_output_mode": export_output_mode.get(),
                 "custom_output_flag": custom_output_flag,
                 "export_mode": export_mode.get(),
-                "custom_export_path": custom_export_entry,
+                "custom_output_folder": custom_export_entry,
                 "filename_mode": filenametemplate_mode.get(),
                 "custom_filename_template": custom_filename_template
             }
@@ -1151,7 +1183,7 @@ def open_settings_window():
 
     tk.Label(top, text="Output Parameter (optional):").grid(row=1, column=0, sticky='w', padx=10, pady=5)
     param_entry = tk.Entry(top, width=40)
-    param_entry.insert(0, settings['DEFAULT'].get('output_parameter', ''))
+    param_entry.insert(0, settings['DEFAULT'].get('output_flag', ''))
     param_entry.grid(row=1, column=1, padx=10, pady=5)
     
     tk.Label(top, text="Output Path (optional):").grid(row=2, column=0, sticky='w', padx=10, pady=5)
@@ -1174,15 +1206,16 @@ def open_settings_window():
 
     ttk.Button(top, text="Browse", command=browse_folder).grid(row=2, column=2, padx=5)
 
-    # use_custom = tk.BooleanVar(value=settings['DEFAULT'].getboolean('use_custom_output', False))
-    # tk.Checkbutton(top, text="Use Output Folder", variable=use_custom).grid(row=4, column=1, sticky='w', pady=5)
-
+    show_hints = tk.BooleanVar(value=settings['DEFAULT'].getboolean('show_hints', False))
+    tk.Checkbutton(top, text="Show hints on hover", variable=show_hints).grid(row=4, column=1, sticky='w', pady=5)
+    
     def save():
         settings['DEFAULT']['software_path'] = yt_entry.get()
-        settings['DEFAULT']['output_parameter'] = param_entry.get()
+        settings['DEFAULT']['output_flag'] = param_entry.get()
         settings['DEFAULT']['output_folder'] = folder_entry.get()
         settings['DEFAULT']['filename_template'] = filenametemplate_entry.get().strip()
-        # settings['DEFAULT']['use_custom_output'] = str(use_custom.get())
+        settings['DEFAULT']['show_hints'] = str(show_hints.get())
+        
         save_settings(settings)
         top.destroy()
 
@@ -1271,7 +1304,8 @@ def append_console_output(text, tag=None):
     root.update_idletasks()
 
 if __name__ == "__main__":
-    
+    global showtipsvalue
+
 # ========= COMMAND-LINE MODE ===========
     if len(sys.argv) > 1:
         shortname = sys.argv[1]
@@ -1315,43 +1349,43 @@ if __name__ == "__main__":
     add_icon = PhotoImage(file=os.path.join(BASE_DIR, "add.png"))  # Keep references global
     add_btn = ttk.Button(button_frame, image=add_icon,  command=add_profile)
     add_btn.pack(side=tk.LEFT)
-    Tooltip(add_btn, "Create a new profile")
+    Tooltip(add_btn, "Create a new profile", True)
   
     edit_icon = PhotoImage(file=os.path.join(BASE_DIR, "edit.png"))  # Keep references global
     edit_btn = ttk.Button(button_frame, image=edit_icon,   command=edit_profile)
     edit_btn.pack(side=tk.LEFT)
-    Tooltip(edit_btn, "Edit a profile")    
+    Tooltip(edit_btn, "Edit a profile", True)    
     
     delete_icon = PhotoImage(file=os.path.join(BASE_DIR, "delete.png"))  # Keep references global    
     delete_btn = ttk.Button(button_frame, image=delete_icon,  command=delete_profile)
     delete_btn.pack(side=tk.LEFT)
-    Tooltip(delete_btn, "Delete a profile")    
+    Tooltip(delete_btn, "Delete a profile", True)   
     
     run_icon = PhotoImage(file=os.path.join(BASE_DIR, "run.png"))  # Keep references global
     run_btn = ttk.Button(button_frame, image=run_icon, command=on_profile_double_click)
     run_btn.pack(side=tk.LEFT)
-    Tooltip(run_btn, "Run a profile")    
+    Tooltip(run_btn, "Run a profile", True)  
     
     stop_icon = PhotoImage(file=os.path.join(BASE_DIR, "stop.png"))  # Keep references global    
     stp_btn = ttk.Button(button_frame, image=stop_icon, command=kill_process)
     stp_btn.pack(side=tk.LEFT)
-    Tooltip(stp_btn, "Stop a command")
+    Tooltip(stp_btn, "Stop a command", True)  
     
     about_icon = PhotoImage(file=os.path.join(BASE_DIR, "about.png"))  # Keep references global
     about_btn = ttk.Button(button_frame, image=about_icon, command=open_about_window)
     about_btn.pack(side=tk.LEFT)
-    Tooltip(about_btn, "About")
+    Tooltip(about_btn, "About", True)  
     
     settings_icon = PhotoImage(file=os.path.join(BASE_DIR, "settings.png"))  # Keep references global
     settings_btn = ttk.Button(button_frame, image=settings_icon, command=open_settings_window)
     settings_btn.pack(side=tk.LEFT)
-    Tooltip(settings_btn, "Settings")
+    Tooltip(settings_btn, "Settings", True)  
     
     show_icon = PhotoImage(file=os.path.join(BASE_DIR, "show.png"))  # Keep references global
     hide_icon = PhotoImage(file=os.path.join(BASE_DIR, "hide.png"))  # Keep references global
     toggle_btn = ttk.Button(button_frame, image=hide_icon, command=toggle_console)
     toggle_btn.pack(side=tk.LEFT)
-    Tooltip(toggle_btn, "Show/Hide console")
+    Tooltip(toggle_btn, "Show/Hide console", True)  
     
     ttk.Button(right_frame, text="Clear Console", command=clear_console).pack(pady=(0, 6))
 
@@ -1412,7 +1446,7 @@ if __name__ == "__main__":
     )
     console_input_entry.pack(fill=tk.X, pady=(5,0))
     console_input_entry.bind("<Return>", send_to_process) # Bind Enter key
-    
+    Tooltip(console_input_entry, "Command line for console where you can enter text/values/keys when prompted by the command line/software you used." ,showtipsvalue)    
     console_output.pack(fill=tk.BOTH, expand=True)
     console_output.configure(state='disabled')
     # Configure tags for different types of output (cmd.exe style colors)
@@ -1428,4 +1462,6 @@ if __name__ == "__main__":
     style.configure('TButton', padding=6, font=('Segoe UI', 10))
    
     refresh_profiles()
+
+
     root.mainloop()   

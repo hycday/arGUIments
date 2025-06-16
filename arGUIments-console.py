@@ -21,7 +21,7 @@ def load_settings():
     if not os.path.exists(SETTINGS_FILE):
         config['DEFAULT'] = {
             'software_path': 'yt-dlp',
-            'output_parameter': '--output',
+            'output_flag': '--output',
             'output_folder': '',
             'filename_template': '%(title)s.%(ext)s',
             # 'use_custom_output': 'False'
@@ -69,7 +69,7 @@ def build_command(shortname, user_args):
     flag = None
     exportmode = profile.get("export_output_mode")
     if exportmode == "default":
-        flag = settings['DEFAULT'].get('output_parameter')
+        flag = settings['DEFAULT'].get('output_flag')
     elif exportmode == "custom":
         flag = profile.get("custom_output_flag")       
     
@@ -80,7 +80,7 @@ def build_command(shortname, user_args):
     elif mode == "software":
         folder = ''
     elif mode == "custom":
-        folder = profile.get("custom_export_path", "")        
+        folder = profile.get("custom_output_folder", "")        
         
     template = None
     template_name = profile.get("filename_mode")
