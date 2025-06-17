@@ -2,7 +2,7 @@
 Simplify execution of commands with arguments
 
 ## Purpose
-
+Create profiles to ease up usage of softwares with command lines, so that you can re-use them more easily (and also via command lines which would work like a sort of alias of command lines).
 
 
 ## Usage
