@@ -1244,7 +1244,7 @@ def open_about_window():
     center_window(top, 400, 150)
     top.grab_set()
 
-    tk.Label(top, text="arGUIments \nv1.0.0\nCreated with ❤️\nby hycday", font=("Segoe UI", 10)).pack(pady=(10, 5))
+    tk.Label(top, text="arGUIments \nv1.0.0\nCreated with ❤️\nby dayeggpi", font=("Segoe UI", 10)).pack(pady=(10, 5))
 
 def clear_console():
     console_output.configure(state='normal')
