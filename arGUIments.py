@@ -48,30 +48,36 @@ PROFILE_FILE = os.path.join(BASE_DIR_SETTINGS, "profiles.json")
 SETTINGS_FILE = os.path.join(BASE_DIR_SETTINGS, "settings.ini")
 
 
-
 yt_process = None
 
-
 class Tooltip:
-    def __init__(self, widget, text, showtool=False):
+    instances = []
+
+    def __init__(self, widget, text, showtool=None):
         self.widget = widget
         self.text = text
         self.tip = None
-        self.showtool = showtool
 
-        # Always bind; tooltip visibility is controlled at hover-time
+        # None means: dynamically check settings each time
+        # True/False means: force on/off always
+        self.static_override = showtool
+
+        Tooltip.instances.append(self)
+
+        # Always bind so we can evaluate at hover time
         self.widget.bind("<Enter>", self.on_enter)
         self.widget.bind("<Leave>", self.on_leave)
 
     def on_enter(self, event=None):
-        # Use dynamic check on showtool to allow runtime control
-        try:
-            from __main__ import showtipsvalue
-            if self.showtool or showtipsvalue:
-                self.show_tooltip()
-        except ImportError:
-            if self.showtool:
-                self.show_tooltip()
+        from __main__ import showtipsvalue
+
+        should_show = (
+            self.static_override is True
+            or (self.static_override is None and showtipsvalue)
+        )
+
+        if should_show:
+            self.show_tooltip()
 
     def on_leave(self, event=None):
         self.hide_tooltip()
@@ -98,6 +104,13 @@ class Tooltip:
         if self.tip:
             self.tip.destroy()
             self.tip = None
+
+    @classmethod
+    def refresh_all(cls):
+        for inst in cls.instances:
+            inst.hide_tooltip()
+
+
 
 
 
@@ -492,7 +505,7 @@ def add_profile():
 
  
     frame_inline = tk.LabelFrame(firstpart_group, text="Program Path")
-    Tooltip(frame_inline, "Path to the desired program you wish to create a profile for. \nDefault will use the one defined in settings. \nCustom will allow you to chose one specifically for this profile." ,showtipsvalue)
+    Tooltip(frame_inline, "Path to the desired program you wish to create a profile for. \nDefault will use the one defined in settings. \nCustom will allow you to chose one specifically for this profile." ,None)
     frame_inline.grid(row=3, column=0,  sticky='w', padx=15)
     
     path_mode = tk.StringVar(value="default")
@@ -534,7 +547,7 @@ def add_profile():
     output_group.grid(row=1, column=0,  sticky='nswe')
     export_output_mode = tk.StringVar(value="default")
     exportparam_group = tk.LabelFrame(output_group, text="Output Parameter")
-    Tooltip(exportparam_group, "If your software allows for some export/output command, enter here the argument value to trigger such feature. \nThe value will depend and vary from the software you chose in Program Path. \nDefault will use the value from settings. \nDisable will void the feature for this profile (unless it is automatically done so as per the Command Template). \nCustom will allow you to set one specific for this profile." ,showtipsvalue)
+    Tooltip(exportparam_group, "If your software allows for some export/output command, enter here the argument value to trigger such feature. \nThe value will depend and vary from the software you chose in Program Path. \nDefault will use the value from settings. \nDisable will void the feature for this profile (unless it is automatically done so as per the Command Template). \nCustom will allow you to set one specific for this profile." ,None)
     exportparam_group.grid(row=0, column=0,  sticky='w', padx=15)
     tk.Radiobutton(exportparam_group, text="Default (as per settings)  ", variable=export_output_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
     tk.Radiobutton(exportparam_group, text="Disable Output", variable=export_output_mode, value="disable").grid(row=1, column=0, sticky='w', columnspan=2)
@@ -550,7 +563,7 @@ def add_profile():
     secondpart_group.grid(row=2, column=0,  sticky='nswe')
     export_mode = tk.StringVar(value="default")
     export_group = tk.LabelFrame(secondpart_group, text="Output Path")
-    Tooltip(export_group, "If Output Parameter is not disabled, Output Path will allow you to chose a specific folder in which the export/output will be created in. \nDefault will use the value as per settings. \nVariable will use the folder from which arGUIments was ran from (note that if you added the path in which arGUIments is installed in, to the PATH environment variable, this will also work). \nCustom will allow you to chose a specific folder for this profile." ,showtipsvalue)    
+    Tooltip(export_group, "If Output Parameter is not disabled, Output Path will allow you to chose a specific folder in which the export/output will be created in. \nDefault will use the value as per settings. \nVariable will use the folder from which arGUIments was ran from (note that if you added the path in which arGUIments is installed in, to the PATH environment variable, this will also work). \nCustom will allow you to chose a specific folder for this profile." ,None)    
     export_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_path_1 = tk.Radiobutton(export_group, text="Default (as per settings) ", variable=export_mode, value="default")
     choice_path_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -571,7 +584,7 @@ def add_profile():
     filename_group.grid(row=3, column=0,  sticky='nswe')
     filenametemplate_mode = tk.StringVar(value="default")
     template_group = tk.LabelFrame(filename_group, text="Output Filename Template")
-    Tooltip(template_group, "If Output Parameter is not disabled, Output Filename Template will allow you to chose a specific filename (or filename template) for your export/output. \nThe value you enter here can be a fixed filename (e.g. 'export.csv', 'video.mp4', and so on), or something more generic as per what the software from Program Path allows. \nDefault will use the value from settings. \nCustom will allow you to chose a specific one for this profile." ,showtipsvalue)
+    Tooltip(template_group, "If Output Parameter is not disabled, Output Filename Template will allow you to chose a specific filename (or filename template) for your export/output. \nThe value you enter here can be a fixed filename (e.g. 'export.csv', 'video.mp4', and so on), or something more generic as per what the software from Program Path allows. \nDefault will use the value from settings. \nCustom will allow you to chose a specific one for this profile." ,None)
     template_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_filename_1 = tk.Radiobutton(template_group, text="Default (as per settings)  ", variable=filenametemplate_mode, value="default")
     choice_filename_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -813,7 +826,7 @@ def edit_profile():
 
  
     frame_inline = tk.LabelFrame(firstpart_group, text="Program Path")
-    Tooltip(frame_inline, "Path to the desired program you wish to create a profile for. \nDefault will use the one defined in settings. \nCustom will allow you to chose one specifically for this profile." ,showtipsvalue)
+    Tooltip(frame_inline, "Path to the desired program you wish to create a profile for. \nDefault will use the one defined in settings. \nCustom will allow you to chose one specifically for this profile." ,None)
     frame_inline.grid(row=3, column=0,  sticky='w', padx=15)
     
     path_mode = tk.StringVar(value=profile.get("path_mode", "default"))
@@ -855,7 +868,7 @@ def edit_profile():
     output_group.grid(row=1, column=0,  sticky='nswe')
     export_output_mode = tk.StringVar(value=profile.get("export_output_mode", "default"))
     exportparam_group = tk.LabelFrame(output_group, text="Output Parameter")
-    Tooltip(exportparam_group, "If your software allows for some export/output command, enter here the argument value to trigger such feature. \nThe value will depend and vary from the software you chose in Program Path. \nDefault will use the value from settings. \nDisable will void the feature for this profile (unless it is automatically done so as per the Command Template). \nCustom will allow you to set one specific for this profile." ,showtipsvalue)
+    Tooltip(exportparam_group, "If your software allows for some export/output command, enter here the argument value to trigger such feature. \nThe value will depend and vary from the software you chose in Program Path. \nDefault will use the value from settings. \nDisable will void the feature for this profile (unless it is automatically done so as per the Command Template). \nCustom will allow you to set one specific for this profile." ,None)
     exportparam_group.grid(row=0, column=0,  sticky='w', padx=15)
     tk.Radiobutton(exportparam_group, text="Default (as per settings)  ", variable=export_output_mode, value="default").grid(row=0, column=0, sticky='w', columnspan=2)
     tk.Radiobutton(exportparam_group, text="Disable Output", variable=export_output_mode, value="disable").grid(row=1, column=0, sticky='w', columnspan=2)
@@ -871,7 +884,7 @@ def edit_profile():
     secondpart_group.grid(row=2, column=0,  sticky='nswe')
     export_mode = tk.StringVar(value=profile.get("export_mode", "default"))
     export_group = tk.LabelFrame(secondpart_group, text="Output Path")
-    Tooltip(export_group, "If Output Parameter is not disabled, Output Path will allow you to chose a specific folder in which the export/output will be created in. \nDefault will use the value as per settings. \nVariable will use the folder from which arGUIments was ran from (note that if you added the path in which arGUIments is installed in, to the PATH environment variable, this will also work). \nCustom will allow you to chose a specific folder for this profile." ,showtipsvalue)    
+    Tooltip(export_group, "If Output Parameter is not disabled, Output Path will allow you to chose a specific folder in which the export/output will be created in. \nDefault will use the value as per settings. \nVariable will use the folder from which arGUIments was ran from (note that if you added the path in which arGUIments is installed in, to the PATH environment variable, this will also work). \nCustom will allow you to chose a specific folder for this profile." ,None)    
     export_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_path_1 = tk.Radiobutton(export_group, text="Default (as per settings) ", variable=export_mode, value="default")
     choice_path_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -892,7 +905,7 @@ def edit_profile():
     filename_group.grid(row=3, column=0,  sticky='nswe')
     filenametemplate_mode = tk.StringVar(value=profile.get("filename_mode", "default"))
     template_group = tk.LabelFrame(filename_group, text="Output Filename Template")
-    Tooltip(template_group, "If Output Parameter is not disabled, Output Filename Template will allow you to chose a specific filename (or filename template) for your export/output. \nThe value you enter here can be a fixed filename (e.g. 'export.csv', 'video.mp4', and so on), or something more generic as per what the software from Program Path allows. \nDefault will use the value from settings. \nCustom will allow you to chose a specific one for this profile." ,showtipsvalue)    
+    Tooltip(template_group, "If Output Parameter is not disabled, Output Filename Template will allow you to chose a specific filename (or filename template) for your export/output. \nThe value you enter here can be a fixed filename (e.g. 'export.csv', 'video.mp4', and so on), or something more generic as per what the software from Program Path allows. \nDefault will use the value from settings. \nCustom will allow you to chose a specific one for this profile." ,None)    
     template_group.grid(row=0, column=0,  sticky='w', padx=15)
     choice_filename_1 = tk.Radiobutton(template_group, text="Default (as per settings)  ", variable=filenametemplate_mode, value="default")
     choice_filename_1.grid(row=0, column=0, sticky='w', columnspan=2)
@@ -1218,6 +1231,7 @@ def open_settings_window():
         
         save_settings(settings)
         top.destroy()
+        Tooltip.refresh_all()
 
     ttk.Button(top, text="Save", command=save).grid(row=5, column=1, sticky='e', pady=10)
 
@@ -1446,7 +1460,7 @@ if __name__ == "__main__":
     )
     console_input_entry.pack(fill=tk.X, pady=(5,0))
     console_input_entry.bind("<Return>", send_to_process) # Bind Enter key
-    Tooltip(console_input_entry, "Command line for console where you can enter text/values/keys when prompted by the command line/software you used." ,showtipsvalue)    
+    Tooltip(console_input_entry, "Command line for console where you can enter text/values/keys when prompted by the command line/software you used." ,None)    
     console_output.pack(fill=tk.BOTH, expand=True)
     console_output.configure(state='disabled')
     # Configure tags for different types of output (cmd.exe style colors)
