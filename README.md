@@ -8,7 +8,7 @@ Simplify execution of commands with arguments
 ## Usage
 Launch with `python arGUIments.py` or `python arGUIments-console.py` (for the console version).
 
-You can also compile it to an exe by having the *.ico and *.spec file in same folder as arGUIments.py and launching the file "build-exe.bat". The output exe will be in the "dist" folder.
+You can also compile it to an exe by having the *.ico and *.spec file in same folder as arGUIments.py and launching the file "pyinstaller arGUIments.spec". The output exe will be in the "dist" folder.
 Then you simply execute the exe file to launch it.
 
 ![Image](https://i.imgur.com/ogsXwzX.gif)
